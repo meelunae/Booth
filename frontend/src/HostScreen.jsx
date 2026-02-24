@@ -17,27 +17,37 @@ function SortableSongItem({ song, idx, onRemove }) {
     };
 
     return (
-        <div ref={setNodeRef} style={style} className="glass p-3 rounded-xl flex items-center gap-3 group border border-white/5 bg-black/20 relative">
+        <div
+            ref={setNodeRef}
+            style={style}
+            className={`glass p-3 rounded-xl flex items-center gap-4 group border bg-black/40 relative overflow-hidden transition-all ${isDragging ? 'shadow-[0_0_20px_rgba(234,0,217,0.4)] scale-105 border-neon-magenta/50 z-50' : 'border-white/5 hover:border-white/20 hover:bg-black/60 z-10'}`}
+        >
+            {/* Animated left border on hover/drag */}
+            <div className={`absolute top-0 left-0 w-1 h-full bg-gradient-to-b from-neon-magenta to-neon-cyan transition-transform duration-300 ${isDragging ? 'translate-x-0' : '-translate-x-full group-hover:translate-x-0'}`} />
+
             {/* Drag Handle */}
-            <div {...attributes} {...listeners} className="cursor-grab active:cursor-grabbing p-2 -ml-2 text-gray-500 hover:text-white transition-colors">
+            <div {...attributes} {...listeners} className="cursor-grab active:cursor-grabbing p-2 -ml-2 text-gray-500 hover:text-neon-cyan transition-colors z-10 shrink-0">
                 <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8h16M4 16h16" />
                 </svg>
             </div>
 
-            <div className="w-8 h-8 rounded-full bg-white/5 flex items-center justify-center text-gray-400 font-bold text-sm select-none">
+            <div className={`w-8 h-8 rounded-lg flex items-center justify-center font-bold text-xs select-none transition-colors z-10 shrink-0 ${isDragging ? 'bg-neon-magenta text-white' : 'bg-white/10 text-gray-300 group-hover:bg-white/20 group-hover:text-white'}`}>
                 {idx + 1}
             </div>
 
-            <div className="flex-1 min-w-0">
-                <p className="font-semibold text-white truncate text-sm">{song.title}</p>
-                <p className="text-xs text-neon-cyan truncate mt-0.5">from {song.queuedBy}</p>
+            <div className="flex-1 min-w-0 z-10">
+                <p className="font-bold text-white truncate text-sm tracking-wide">{song.title}</p>
+                <div className="flex items-center gap-1.5 mt-1 opacity-80 group-hover:opacity-100 transition-opacity">
+                    <span className="w-1.5 h-1.5 rounded-full bg-neon-cyan"></span>
+                    <p className="text-xs text-gray-400 truncate">Queued by <span className="text-neon-cyan font-semibold">{song.queuedBy}</span></p>
+                </div>
             </div>
 
             {/* Delete/Trash Button */}
             <button
                 onClick={() => onRemove(song.id)}
-                className="p-2 text-gray-500 hover:text-red-500 bg-white/5 hover:bg-white/10 rounded-lg opacity-0 group-hover:opacity-100 transition-all"
+                className="p-2.5 z-10 text-gray-500 hover:text-white hover:bg-red-500/80 hover:shadow-[0_0_15px_rgba(255,0,0,0.5)] rounded-lg opacity-0 group-hover:opacity-100 transition-all shrink-0"
             >
                 <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
@@ -47,9 +57,10 @@ function SortableSongItem({ song, idx, onRemove }) {
     );
 }
 
-export default function HostScreen({ socket, roomId, hostName }) {
+export default function HostScreen({ socket, roomId, hostName, sessionId, onLeaveRoom }) {
     const [session, setSession] = useState({ queue: [], currentSong: null, users: [] });
     const [playerError, setPlayerError] = useState(null);
+    const [showEndModal, setShowEndModal] = useState(false);
 
     // Setup drag sensors
     const sensors = useSensors(
@@ -69,30 +80,33 @@ export default function HostScreen({ socket, roomId, hostName }) {
         }
     }
 
+    const activeUsers = hostName
+        ? [{ id: 'host-system', username: hostName, isHost: true }, ...session.users]
+        : session.users;
+
     useEffect(() => {
-        // Explicitly join as host so the socket enters the correct broadcasting room
-        socket.emit('join_host', { roomId });
+        socket.emit('join_host', { roomId, sessionId });
 
         socket.on('session_state', (state) => {
             setSession(state);
-            setPlayerError(null); // Reset error when new state arrives
+            setPlayerError(null);
         });
         return () => {
             socket.off('session_state');
         };
-    }, [socket, roomId]);
+    }, [socket, roomId, sessionId]);
 
     const handleVideoEnded = () => {
-        socket.emit('next_song', { roomId });
+        socket.emit('next_song', { roomId, sessionId });
     };
 
     const handleSkipCurrent = () => {
-        socket.emit('next_song', { roomId });
+        socket.emit('next_song', { roomId, sessionId });
     };
 
     const handleRemoveSong = (songId) => {
         // We simulate the Host user object since Host Screen doesn't formally 'join_session' as a jammer
-        socket.emit('remove_song', { user: { username: 'Host', roomId }, songId });
+        socket.emit('remove_song', { roomId, sessionId, songId });
     };
 
     const handleDragEnd = (event) => {
@@ -103,13 +117,11 @@ export default function HostScreen({ socket, roomId, hostName }) {
         const newIndex = session.queue.findIndex((s) => s.id === over.id);
 
         if (oldIndex !== -1 && newIndex !== -1) {
-            // Optimistic UI update
             setSession(prev => ({
                 ...prev,
                 queue: arrayMove(prev.queue, oldIndex, newIndex)
             }));
-            // Send to server
-            socket.emit('reorder_queue', { roomId, oldIndex, newIndex });
+            socket.emit('reorder_queue', { roomId, sessionId, oldIndex, newIndex });
         }
     };
 
@@ -170,10 +182,33 @@ export default function HostScreen({ socket, roomId, hostName }) {
                             <p className="text-gray-300 text-lg drop-shadow-md">Queued by: {session.currentSong.queuedBy}</p>
                         </div>
                     </div>
+                ) : session.queue.length > 0 ? (
+                    <div className="flex-1 flex flex-col items-center justify-center relative overflow-hidden">
+                        <div className="absolute inset-0 bg-gradient-to-br from-neon-dark-blue to-neon-purple opacity-80 z-0" />
+                        <div className="z-10 text-center glass p-12 rounded-3xl shadow-[0_0_50px_rgba(10,189,198,0.3)] border border-neon-cyan/30 animate-in zoom-in duration-500">
+                            <h2 className="text-2xl text-neon-cyan mb-2 font-bold uppercase tracking-widest flex items-center justify-center gap-3">
+                                Up Next <span className="w-2 h-2 rounded-full bg-neon-cyan animate-ping"></span>
+                            </h2>
+                            <h1 className="text-5xl font-extrabold mb-8 text-white drop-shadow-lg leading-tight text-balance max-w-3xl">
+                                {session.queue[0].title}
+                            </h1>
+                            <p className="text-xl text-gray-300 mb-12">Queued by <span className="text-neon-cyan font-bold">{session.queue[0].queuedBy}</span></p>
+                            <button
+                                onClick={handleSkipCurrent}
+                                className="bg-gradient-to-r from-neon-magenta to-neon-cyan text-white text-xl font-bold px-10 py-5 rounded-2xl hover:scale-105 active:scale-95 transition-all shadow-[0_0_30px_rgba(234,0,217,0.5)] flex items-center gap-3 mx-auto"
+                            >
+                                <svg xmlns="http://www.w3.org/2000/svg" className="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                </svg>
+                                Start Performance
+                            </button>
+                        </div>
+                    </div>
                 ) : (
                     <div className="flex-1 flex flex-col items-center justify-center relative overflow-hidden">
                         <div className="absolute inset-0 bg-gradient-to-br from-neon-dark-blue to-neon-purple opacity-80 z-0" />
-                        <div className="z-10 text-center glass p-12 rounded-3xl animate-pulse shadow-[0_0_50px_rgba(234,0,217,0.3)]">
+                        <div className="z-10 text-center glass p-12 rounded-3xl animate-pulse shadow-[0_0_50px_rgba(234,0,217,0.3)] border border-neon-magenta/20">
                             <h1 className="text-6xl font-extrabold mb-4 bg-clip-text text-transparent bg-gradient-to-r from-neon-magenta to-neon-cyan drop-shadow-lg">
                                 {hostName ? `${hostName}'s Room` : 'Booth Session'}
                             </h1>
@@ -191,9 +226,15 @@ export default function HostScreen({ socket, roomId, hostName }) {
                     <div className="bg-white p-3 rounded-xl shadow-[0_0_20px_rgba(10,189,198,0.4)]">
                         <QRCode value={joinUrl} size={150} level="M" />
                     </div>
-                    <p className="mt-4 text-xs text-center text-gray-500 max-w-[200px]">
+                    <p className="mt-4 mb-4 text-xs text-center text-gray-500 max-w-[200px]">
                         Scan code or use link to add songs to the queue
                     </p>
+                    <button
+                        onClick={() => setShowEndModal(true)}
+                        className="w-full bg-red-500/10 text-red-500 hover:bg-red-500 hover:text-white border border-red-500/30 uppercase tracking-widest font-bold text-xs py-2.5 rounded-xl transition-all shadow-[0_0_15px_rgba(255,0,0,0.15)] hover:shadow-[0_0_20px_rgba(255,0,0,0.4)]"
+                    >
+                        End Session
+                    </button>
                 </div>
 
                 <div className="flex-1 p-6 overflow-y-auto custom-scrollbar flex flex-col gap-4">
@@ -228,24 +269,69 @@ export default function HostScreen({ socket, roomId, hostName }) {
                             </SortableContext>
 
                             {session.queue.length === 0 && (
-                                <div className="text-center py-10 text-gray-500 border border-dashed border-white/10 rounded-xl bg-black/20">
-                                    The queue is empty.
+                                <div className="text-center py-12 px-4 border border-dashed border-white/10 rounded-xl bg-black/40 flex flex-col items-center justify-center gap-3 animate-in fade-in duration-500">
+                                    <div className="w-12 h-12 rounded-full bg-white/5 flex items-center justify-center text-neon-magenta/60 shadow-[0_0_15px_rgba(234,0,217,0.15)]">
+                                        <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
+                                        </svg>
+                                    </div>
+                                    <p className="text-gray-300 font-semibold text-sm">The queue is empty.</p>
+                                    <p className="text-gray-500 text-xs text-balance">Scan the QR code to search and add some tracks!</p>
                                 </div>
                             )}
                         </div>
                     </DndContext>
                 </div>
 
-                {/* Active users footer */}
-                <div className="p-4 bg-black/60 text-sm flex gap-2 overflow-x-auto no-scrollbar items-center border-t border-white/10">
-                    <span className="text-gray-400 whitespace-nowrap">Acts:</span>
-                    {session.users.map(u => (
-                        <span key={u.id} className="bg-white/10 px-3 py-1 rounded-full text-white whitespace-nowrap text-xs border border-white/5">
-                            {u.username}
-                        </span>
-                    ))}
+                {/* Live Acts VIP List */}
+                <div className="p-5 bg-black/60 border-t border-neon-cyan/30 flex flex-col gap-3 shrink-0">
+                    <h3 className="text-xs uppercase tracking-widest text-neon-cyan font-bold flex items-center gap-2">
+                        <span className="w-2 h-2 rounded-full bg-neon-magenta animate-pulse" /> Live Acts
+                    </h3>
+                    <div className="flex gap-3 overflow-x-auto custom-scrollbar pb-2 items-center">
+                        {activeUsers.map(u => (
+                            <div key={u.id} className={`flex items-center gap-2 px-3 py-1.5 rounded-xl border ${u.isHost ? 'bg-neon-magenta/20 border-neon-magenta text-white shadow-[0_0_10px_rgba(234,0,217,0.3)]' : 'bg-white/5 border-white/10 text-gray-200'} shrink-0`}>
+                                <div className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold ${u.isHost ? 'bg-neon-magenta text-white' : 'bg-white/20 text-white'}`}>
+                                    {u.username.charAt(0).toUpperCase()}
+                                </div>
+                                <span className="text-xs font-bold whitespace-nowrap">{u.isHost ? `${u.username} (Host)` : u.username}</span>
+                            </div>
+                        ))}
+                    </div>
                 </div>
             </div>
+
+            {/* End Session Modal */}
+            {showEndModal && (
+                <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
+                    <div className="glass p-8 max-w-md w-full mx-4 rounded-3xl border border-red-500/30 shadow-[0_0_50px_rgba(255,0,0,0.2)] text-center animate-in zoom-in-95 duration-200">
+                        <div className="w-16 h-16 rounded-full bg-red-500/10 flex items-center justify-center mx-auto mb-6 text-red-500 shadow-[0_0_15px_rgba(255,0,0,0.2)]">
+                            <svg xmlns="http://www.w3.org/2000/svg" className="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                            </svg>
+                        </div>
+                        <h2 className="text-2xl font-bold text-white mb-2">End Session?</h2>
+                        <p className="text-gray-400 mb-8">This will immediately disconnect all Acts and destroy the room. This action cannot be undone.</p>
+                        <div className="flex gap-4">
+                            <button
+                                onClick={() => setShowEndModal(false)}
+                                className="flex-1 py-3 px-4 rounded-xl font-bold text-white bg-white/10 hover:bg-white/20 transition-colors"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                onClick={() => {
+                                    socket.emit('end_session', { roomId, sessionId });
+                                    onLeaveRoom();
+                                }}
+                                className="flex-1 py-3 px-4 rounded-xl font-bold text-white bg-red-500 hover:bg-red-600 shadow-[0_0_15px_rgba(255,0,0,0.4)] transition-all"
+                            >
+                                End Session
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }

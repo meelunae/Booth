@@ -1,10 +1,11 @@
 import { useState, useEffect } from 'react';
 
-export default function MobileScreen({ socket, user }) {
+export default function MobileScreen({ socket, user, sessionId, onLeaveRoom }) {
     const [searchInput, setSearchInput] = useState('');
     const [searchResults, setSearchResults] = useState([]);
     const [isSearching, setIsSearching] = useState(false);
     const [session, setSession] = useState({ queue: [], currentSong: null, users: [] });
+    const [showLeaveModal, setShowLeaveModal] = useState(false);
 
     useEffect(() => {
         socket.on('session_state', (state) => {
@@ -54,9 +55,19 @@ export default function MobileScreen({ socket, user }) {
                 <h1 className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-neon-magenta to-neon-cyan flex items-center gap-2">
                     Booth <span className="text-xs text-white bg-white/20 px-2 py-0.5 rounded-full">{user.roomId}</span>
                 </h1>
-                <div className="flex items-center gap-2">
-                    <div className="w-2 h-2 rounded-full bg-neon-cyan animate-pulse" />
-                    <span className="text-sm font-medium text-gray-300">{user.username}</span>
+                <div className="flex items-center gap-4">
+                    <div className="flex items-center gap-2">
+                        <div className="w-2 h-2 rounded-full bg-neon-cyan animate-pulse" />
+                        <span className="text-sm font-medium text-gray-300">{user.username}</span>
+                    </div>
+                    <button
+                        onClick={() => setShowLeaveModal(true)} className="text-gray-400 hover:text-red-500 transition-colors p-1"
+                        title="Leave Room"
+                    >
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+                        </svg>
+                    </button>
                 </div>
             </div>
 
@@ -142,7 +153,7 @@ export default function MobileScreen({ socket, user }) {
                                 {/* Current user can remove their own songs */}
                                 {song.queuedBy === user.username && (
                                     <button
-                                        onClick={() => socket.emit('remove_song', { user, songId: song.id })}
+                                        onClick={() => socket.emit('remove_song', { roomId: user.roomId, sessionId, songId: song.id })}
                                         className="p-2 text-gray-500 hover:text-red-500 hover:bg-white/10 rounded-lg active:scale-90 transition-all opacity-80 flex-shrink-0"
                                     >
                                         <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -158,12 +169,40 @@ export default function MobileScreen({ socket, user }) {
                                     <span className="text-xl opacity-50">🎵</span>
                                 </div>
                                 <p className="text-sm text-gray-400">Queue is empty</p>
-                                <p className="text-xs text-gray-500 mt-1">Be the first to add a song!</p>
+                                <p className="text-xs text-gray-500 mt-1">Be the one who gets the fun started!</p>
                             </div>
                         )}
                     </div>
                 </div>
             </div>
+            {/* Leave Room Modal */}
+            {showLeaveModal && (
+                <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
+                    <div className="glass p-6 max-w-sm w-full mx-6 rounded-3xl border border-red-500/30 shadow-[0_0_50px_rgba(255,0,0,0.2)] text-center animate-in zoom-in-95 duration-200">
+                        <div className="w-14 h-14 rounded-full bg-red-500/10 flex items-center justify-center mx-auto mb-4 text-red-500">
+                            <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+                            </svg>
+                        </div>
+                        <h2 className="text-xl font-bold text-white mb-2">Leave Session?</h2>
+                        <p className="text-sm text-gray-400 mb-6">Your queued songs will remain, but you will need to re-scan the QR code to rejoin.</p>
+                        <div className="flex gap-3">
+                            <button
+                                onClick={() => setShowLeaveModal(false)}
+                                className="flex-1 py-2.5 px-4 rounded-xl font-bold text-white bg-white/10 hover:bg-white/20 transition-colors"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                onClick={() => onLeaveRoom()}
+                                className="flex-1 py-2.5 px-4 rounded-xl font-bold text-white bg-red-500 hover:bg-red-600 shadow-[0_0_15px_rgba(255,0,0,0.4)] transition-all"
+                            >
+                                Leave
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }

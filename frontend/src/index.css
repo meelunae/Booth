@@ -11,7 +11,7 @@
   --color-glass-border: rgba(10, 189, 198, 0.2);
   /* Cyan tint */
   /* Use google fonts */
-  --font-sans: 'Inter', ui-sans-serif, system-ui, sans-serif;
+  --font-sans: 'Space Grotesk', ui-sans-serif, system-ui, sans-serif;
 }
 
 body {
@@ -33,7 +33,6 @@ body {
   -webkit-backdrop-filter: blur(16px);
   border: 1px solid var(--color-glass-border);
   box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
-  /* Added depth */
 }
 
 /* Custom Scrollbar */

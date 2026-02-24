@@ -30,34 +30,71 @@ async function getSpotifyTitle(url) {
     }
 }
 
-const jamSessionHandler = (io) => {
+// Utility to generate a random 4-char Room Code on the server
+const generateRoomCode = () => {
+    const chars = 'ABCDEFGHIJKLMNPQRSTUVWXYZ123456789';
+    let result = '';
+    for (let i = 0; i < 4; i++) {
+        result += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return result;
+};
+
+const boothSessionHandler = (io) => {
     // Store rooms: { [roomId]: { users: [], queue: [], currentSong: null } }
     const rooms = new Map();
 
     io.on('connection', (socket) => {
         console.log(`[Socket] User connected: ${socket.id}`);
 
-        socket.on('join_host', ({ roomId }) => {
-            console.log(`[Socket] Host ${socket.id} joining room ${roomId}`);
-            if (!rooms.has(roomId)) {
-                rooms.set(roomId, { users: [], queue: [], currentSong: null });
-            }
-            socket.join(roomId);
+        socket.on('create_room', ({ sessionId }, callback) => {
+            const roomId = generateRoomCode();
+            console.log(`[Socket] Host ${sessionId} creating room ${roomId}`);
 
-            const room = rooms.get(roomId);
-            io.to(roomId).emit('session_state', room);
+            rooms.set(roomId, {
+                users: [],
+                queue: [],
+                currentSong: null,
+                hostSessionId: sessionId // Secure the room to this exact session ID
+            });
+
+            socket.join(roomId);
+            if (callback) callback({ success: true, roomId });
         });
 
-        socket.on('join_session', ({ username, roomId }, callback) => {
-            console.log(`[Socket] ${username} joining room ${roomId}`);
-
-            // Initialize room if it doesn't exist
-            if (!rooms.has(roomId)) {
-                rooms.set(roomId, { users: [], queue: [], currentSong: null });
+        socket.on('join_host', ({ roomId, sessionId }, callback) => {
+            const room = rooms.get(roomId);
+            if (!room) {
+                if (callback) callback({ success: false });
+                return;
             }
 
+            // Only the original session that created the room can operate as host
+            if (sessionId !== room.hostSessionId) {
+                console.warn(`[Socket] Unauthorized host join attempt for room ${roomId} by ${sessionId}`);
+                if (callback) callback({ success: false });
+                return;
+            }
+
+            console.log(`[Socket] Host ${sessionId} verified and re-joining room ${roomId}`);
+            socket.join(roomId);
+            io.to(roomId).emit('session_state', room);
+            if (callback) callback({ success: true });
+        });
+
+        socket.on('join_session', ({ username, roomId, sessionId }, callback) => {
+            console.log(`[Socket] ${username} joining room ${roomId}`);
+
             const room = rooms.get(roomId);
-            const user = { id: socket.id, username, roomId };
+            if (!room) {
+                if (callback) callback({ success: false, error: 'Room not found' });
+                return;
+            }
+
+            // Remove previous instances of this session if they refresh
+            room.users = room.users.filter(u => u.sessionId !== sessionId);
+
+            const user = { id: socket.id, sessionId, username, roomId };
             room.users.push(user);
 
             // Join the socket to the isolated room channel
@@ -67,6 +104,22 @@ const jamSessionHandler = (io) => {
             io.to(roomId).emit('session_state', room);
 
             if (callback) callback({ success: true, user });
+        });
+
+        socket.on('end_session', ({ roomId, sessionId }) => {
+            const room = rooms.get(roomId);
+            if (!room) return;
+
+            // Secure: Only the host session can end the room
+            if (sessionId !== room.hostSessionId) return;
+
+            console.log(`[Socket] Host ${sessionId} ended room ${roomId}`);
+
+            // Tell everyone in the room to wipe their session memory
+            io.to(roomId).emit('session_ended');
+
+            // Destroy the room
+            rooms.delete(roomId);
         });
 
         socket.on('search_song', async ({ query }, callback) => {
@@ -112,23 +165,24 @@ const jamSessionHandler = (io) => {
                 id: Date.now().toString(),
                 url,
                 title,
-                queuedBy: user.username
+                queuedBy: user.username,
+                queuedBySessionId: user.sessionId
             };
 
-            // If no song is playing, play immediately
-            if (!room.currentSong) {
-                room.currentSong = song;
-            } else {
-                room.queue.push(song);
-            }
+            // Push the song to the queue. The host must explicitly start it.
+            room.queue.push(song);
 
             io.to(user.roomId).emit('session_state', room);
         });
 
-        socket.on('next_song', ({ roomId }) => {
+        socket.on('next_song', ({ roomId, sessionId }) => {
             console.log(`[Socket] Playing next song in room ${roomId}`);
             const room = rooms.get(roomId);
             if (!room) return;
+
+            if (sessionId !== room.hostSessionId) return;
+
+            console.log(`[Socket] Host resolving next song in room ${roomId}`);
 
             if (room.queue.length > 0) {
                 room.currentSong = room.queue.shift();
@@ -138,9 +192,9 @@ const jamSessionHandler = (io) => {
             io.to(roomId).emit('session_state', room);
         });
 
-        socket.on('remove_song', ({ user, songId }) => {
-            console.log(`[Socket] ${user.username} removing song ${songId} in room ${user.roomId}`);
-            const room = rooms.get(user.roomId);
+        socket.on('remove_song', ({ roomId, sessionId, songId }) => {
+            console.log(`[Socket] Removing song ${songId} from room ${roomId}`);
+            const room = rooms.get(roomId);
             if (!room) return;
 
             // Find song to verify permissions
@@ -148,17 +202,21 @@ const jamSessionHandler = (io) => {
             if (songIndex === -1) return;
 
             const song = room.queue[songIndex];
-            // Allow if user is host OR if user is the one who queued it (MobileScreen doesn't provide host role distinct from user, but we'll allow hostName bypass later if needed)
-            if (song.queuedBy === user.username || user.username === 'Host') { // basic check; front-end handles UI visibility
+            // Allow if user is host OR if user is the one who queued it via matching session
+            if (song.queuedBySessionId === sessionId || sessionId === room.hostSessionId) {
                 room.queue.splice(songIndex, 1);
-                io.to(user.roomId).emit('session_state', room);
+                io.to(roomId).emit('session_state', room);
             }
         });
 
         socket.on('reorder_queue', ({ roomId, oldIndex, newIndex }) => {
-            console.log(`[Socket] Reordering queue in room ${roomId} from ${oldIndex} to ${newIndex}`);
             const room = rooms.get(roomId);
             if (!room) return;
+
+            // Secure: Only the host socket can reorder the queue
+            if (socket.id !== room.hostSocketId) return;
+
+            console.log(`[Socket] Host reordering queue in room ${roomId} from ${oldIndex} to ${newIndex}`);
 
             if (oldIndex < 0 || oldIndex >= room.queue.length || newIndex < 0 || newIndex >= room.queue.length) {
                 return;
@@ -181,7 +239,6 @@ const jamSessionHandler = (io) => {
                     room.users.splice(userIndex, 1);
                     io.to(roomId).emit('session_state', room);
 
-                    // Optional: Cleanup empty rooms after a delay
                     if (room.users.length === 0) {
                         setTimeout(() => {
                             const currentRoom = rooms.get(roomId);
@@ -197,4 +254,4 @@ const jamSessionHandler = (io) => {
     });
 };
 
-module.exports = jamSessionHandler;
+module.exports = boothSessionHandler;
