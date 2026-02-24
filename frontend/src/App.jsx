@@ -33,46 +33,55 @@ function App() {
   useEffect(() => {
     if (!socket) return;
 
-    // Check for existing session in localStorage
-    const savedRoomId = localStorage.getItem('booth_roomId');
-    const savedIsHost = localStorage.getItem('booth_isHost');
-    const savedName = localStorage.getItem('booth_name');
+    const handleReconnect = () => {
+      const savedRoomId = localStorage.getItem('booth_roomId');
+      const savedIsHost = localStorage.getItem('booth_isHost');
+      const savedName = localStorage.getItem('booth_name');
 
-    if (savedRoomId && savedIsHost && savedName) {
-      // If a room parameter exists in the URL but doesn't match the saved room,
-      // the user clicked a new invite link. Clear the auto-resume memory.
-      if (initialRoom && initialRoom !== savedRoomId) {
-        localStorage.removeItem('booth_roomId');
-        localStorage.removeItem('booth_isHost');
-        localStorage.removeItem('booth_name');
-        return;
-      }
+      if (savedRoomId && savedIsHost && savedName) {
+        // If a room parameter exists in the URL but doesn't match the saved room,
+        // the user clicked a new invite link. Clear the auto-resume memory.
+        if (initialRoom && initialRoom !== savedRoomId) {
+          localStorage.removeItem('booth_roomId');
+          localStorage.removeItem('booth_isHost');
+          localStorage.removeItem('booth_name');
+          return;
+        }
 
-      if (savedIsHost === 'true') {
-        socket.emit('join_host', { roomId: savedRoomId, sessionId }, (response) => {
-          if (response && response.success) {
-            setRoomId(savedRoomId);
-            setHostName(savedName);
-            setIsHost(true);
-            window.history.pushState({}, '', `/?room=${savedRoomId}`);
-          } else {
-            localStorage.removeItem('booth_roomId');
-          }
-        });
-      } else {
-        socket.emit('join_session', { username: savedName, roomId: savedRoomId, sessionId }, (response) => {
-          if (response && response.success) {
-            setUser(response.user);
-            setRoomId(savedRoomId);
-            window.history.pushState({}, '', `/?room=${savedRoomId}`);
-          } else {
-            localStorage.removeItem('booth_roomId');
-          }
-        });
+        if (savedIsHost === 'true') {
+          socket.emit('join_host', { roomId: savedRoomId, sessionId }, (response) => {
+            if (response && response.success) {
+              setRoomId(savedRoomId);
+              setHostName(savedName);
+              setIsHost(true);
+              window.history.pushState({}, '', `/?room=${savedRoomId}`);
+            } else {
+              localStorage.removeItem('booth_roomId');
+            }
+          });
+        } else {
+          socket.emit('join_session', { username: savedName, roomId: savedRoomId, sessionId }, (response) => {
+            if (response && response.success) {
+              setUser(response.user);
+              setRoomId(savedRoomId);
+              window.history.pushState({}, '', `/?room=${savedRoomId}`);
+            } else {
+              localStorage.removeItem('booth_roomId');
+            }
+          });
+        }
       }
+    };
+
+    // Run once if already connected, otherwise listen for every subsequent connection
+    if (socket.connected) {
+      handleReconnect();
     }
+    socket.on('connect', handleReconnect);
 
-    return () => socket.close();
+    return () => {
+      socket.off('connect', handleReconnect);
+    };
   }, [socket, sessionId, initialRoom]);
 
   const handleStartHost = (e) => {
@@ -220,6 +229,9 @@ function App() {
             </form>
           )}
         </div>
+        <p className="absolute bottom-6 text-xs text-white/30 font-medium tracking-widest z-10">
+          Made with ❤️ by Meelunae
+        </p>
       </div>
     );
   }
