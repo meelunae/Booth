@@ -57,7 +57,7 @@ function SortableSongItem({ song, idx, onRemove }) {
     );
 }
 
-export default function HostScreen({ socket, roomId, hostName, sessionId, onLeaveRoom }) {
+export default function HostScreen({ socket, roomId, hostName, sessionId, hostIp, onLeaveRoom }) {
     const [session, setSession] = useState({ queue: [], currentSong: null, users: [] });
     const [playerError, setPlayerError] = useState(null);
     const [showEndModal, setShowEndModal] = useState(false);
@@ -68,24 +68,16 @@ export default function HostScreen({ socket, roomId, hostName, sessionId, onLeav
         useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
     );
 
-    // Read custom domain from env if available (supports Vite or standard React patterns)
-    const qrDomain = import.meta.env?.VITE_QR_DOMAIN;
-
-    let joinUrl = `${window.location.protocol}//${window.location.host}/?room=${roomId}`;
-    if (qrDomain) {
-        if (qrDomain.startsWith('http://') || qrDomain.startsWith('https://')) {
-            joinUrl = `${qrDomain}/?room=${roomId}`;
-        } else {
-            joinUrl = `${window.location.protocol}//${qrDomain}/?room=${roomId}`;
-        }
-    }
+    // Generate the correct join URL using the local network IP rather than localhost
+    // Mobile phones must be on the same WiFi network to connect to this IP
+    const joinUrl = `http://${hostIp}:3001/?room=${roomId}`;
 
     const activeUsers = hostName
         ? [{ id: 'host-system', username: hostName, isHost: true }, ...session.users]
         : session.users;
 
     useEffect(() => {
-        socket.emit('join_host', { roomId, sessionId });
+        socket.emit('join_host', { roomId, sessionId }, () => { });
 
         socket.on('session_state', (state) => {
             setSession(state);
