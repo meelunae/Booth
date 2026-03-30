@@ -34,3 +34,4 @@ tower-http = { version = "0.6.8", features = ["cors", "fs"] }
 regex = "1.12.3"
 urlencoding = "2.1.3"
 local-ip-address = "0.6.10"
+base64 = "0.22"

@@ -1,4 +1,7 @@
-use axum::{routing::get, Router};
+use axum::{
+    routing::get,
+    Router,
+};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use socketioxide::{
@@ -70,6 +73,131 @@ async fn get_youtube_title(url: &str) -> String {
         }
     }
     "YouTube Video".to_string()
+}
+
+fn extract_bvid(url: &str) -> Option<String> {
+    let re = Regex::new(r"bilibili\.com/video/(BV[^/?#]+)").unwrap();
+    re.captures(url).map(|caps| caps[1].to_string())
+}
+
+async fn get_bilibili_title(url: &str) -> String {
+    if let Some(bvid) = extract_bvid(url) {
+        let api = format!("https://api.bilibili.com/x/web-interface/view?bvid={}", bvid);
+        let client = reqwest::Client::new();
+        if let Ok(resp) = client.get(&api)
+            .header("User-Agent", "Mozilla/5.0")
+            .header("Referer", "https://www.bilibili.com")
+            .send().await
+        {
+            if let Ok(json) = resp.json::<serde_json::Value>().await {
+                if let Some(title) = json.pointer("/data/title").and_then(|t| t.as_str()) {
+                    return title.to_string();
+                }
+            }
+        }
+    }
+    "Bilibili Video".to_string()
+}
+
+async fn fetch_thumbnail_as_data_uri(client: &reqwest::Client, url: &str) -> String {
+    if let Ok(resp) = client.get(url)
+        .header("Referer", "https://www.bilibili.com")
+        .header("User-Agent", "Mozilla/5.0")
+        .send().await
+    {
+        let content_type = resp.headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("image/jpeg")
+            .to_string();
+        if let Ok(bytes) = resp.bytes().await {
+            use base64::Engine;
+            let encoded = base64::prelude::BASE64_STANDARD.encode(&bytes);
+            return format!("data:{};base64,{}", content_type, encoded);
+        }
+    }
+    url.to_string()
+}
+
+async fn search_bilibili(query: &str) -> Vec<serde_json::Value> {
+    let url = format!(
+        "https://api.bilibili.com/x/web-interface/search/type?search_type=video&keyword={}&page=1",
+        urlencoding::encode(query)
+    );
+    let client = reqwest::Client::new();
+    match client.get(&url)
+        .header("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+        .header("Referer", "https://www.bilibili.com")
+        .header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+        .send().await
+    {
+        Ok(resp) => {
+            match resp.text().await {
+                Ok(text) => {
+                    if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
+                        if json.get("code").and_then(|c| c.as_i64()) == Some(0) {
+                            if let Some(results) = json.pointer("/data/result").and_then(|r| r.as_array()) {
+                                let em_re = Regex::new(r"<[^>]+>").unwrap();
+
+                                // Collect video metadata first
+                                let videos: Vec<(String, String, String, String)> = results.iter()
+                                    .filter(|v| v.get("bvid").and_then(|b| b.as_str()).map(|s| !s.is_empty()).unwrap_or(false))
+                                    .take(5)
+                                    .map(|v| {
+                                        let bvid = v.get("bvid").and_then(|b| b.as_str()).unwrap_or("").to_string();
+                                        let raw_title = v.get("title").and_then(|t| t.as_str()).unwrap_or("");
+                                        let title = em_re.replace_all(raw_title, "").to_string();
+                                        let pic = v.get("pic").and_then(|p| p.as_str()).unwrap_or("");
+                                        let thumbnail_url = if pic.starts_with("//") {
+                                            format!("https:{}", pic)
+                                        } else {
+                                            pic.to_string()
+                                        };
+                                        let duration = v.get("duration").and_then(|d| d.as_str()).unwrap_or("0:00").to_string();
+                                        (bvid, title, thumbnail_url, duration)
+                                    })
+                                    .collect();
+
+                                // Concurrently fetch all thumbnails as base64 data URIs
+                                let mut handles = Vec::new();
+                                for (_, _, thumbnail_url, _) in &videos {
+                                    let c = client.clone();
+                                    let u = thumbnail_url.clone();
+                                    handles.push(tokio::spawn(async move {
+                                        fetch_thumbnail_as_data_uri(&c, &u).await
+                                    }));
+                                }
+                                let mut thumbnails = Vec::new();
+                                for handle in handles {
+                                    thumbnails.push(handle.await.unwrap_or_default());
+                                }
+
+                                let mapped: Vec<serde_json::Value> = videos.into_iter().zip(thumbnails)
+                                    .map(|((bvid, title, _, duration), thumbnail)| {
+                                        serde_json::json!({
+                                            "id": bvid,
+                                            "title": title,
+                                            "thumbnail": thumbnail,
+                                            "url": format!("https://www.bilibili.com/video/{}", bvid),
+                                            "duration": duration,
+                                            "platform": "bilibili"
+                                        })
+                                    })
+                                    .collect();
+
+                                println!("[Bilibili Search] Returning {} results", mapped.len());
+                                return mapped;
+                            }
+                        }
+                    }
+                }
+                Err(e) => println!("[Bilibili Search] Failed to read body: {}", e),
+            }
+        }
+        Err(e) => println!("[Bilibili Search] Request failed: {}", e),
+    }
+    println!("[Bilibili Search] No results for query: {}", query);
+    vec![]
 }
 
 async fn search_youtube(query: &str) -> Vec<serde_json::Value> {
@@ -220,11 +348,21 @@ fn on_connect(socket: SocketRef, store: RoomStore, io: SocketIo) {
 
     socket.on("search_song", |_socket: SocketRef, Data::<serde_json::Value>(data), ack: socketioxide::extract::AckSender| async move {
         let query = data.get("query").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let platform = data.get("platform").and_then(|v| v.as_str()).unwrap_or("youtube").to_string();
         let mut search_query = query.clone();
-        if !search_query.to_lowercase().contains("karaoke") {
-            search_query = format!("{} lyrics karaoke", search_query);
-        }
-        let results = search_youtube(&search_query).await;
+
+        let results = if platform == "bilibili" {
+            if !search_query.contains("KTV") && !search_query.contains("卡拉OK") && !search_query.to_lowercase().contains("karaoke") {
+                search_query = format!("{} KTV", search_query);
+            }
+            search_bilibili(&search_query).await
+        } else {
+            if !search_query.to_lowercase().contains("karaoke") {
+                search_query = format!("{} lyrics karaoke", search_query);
+            }
+            search_youtube(&search_query).await
+        };
+
         let _ = ack.send(&serde_json::json!({
             "success": true,
             "results": results
@@ -245,6 +383,8 @@ fn on_connect(socket: SocketRef, store: RoomStore, io: SocketIo) {
                 
                 let title = if let Some(t) = pre_fetched_title {
                     t.to_string()
+                } else if url.contains("bilibili.com") {
+                    get_bilibili_title(&url).await
                 } else {
                     get_youtube_title(&url).await
                 };

@@ -14,6 +14,58 @@ async function getYouTubeTitle(url) {
     }
 }
 
+// Helper to extract BVID from a Bilibili URL
+function extractBvid(url) {
+    const match = url.match(/bilibili\.com\/video\/(BV[^/?#]+)/);
+    return match ? match[1] : null;
+}
+
+// Helper to fetch Bilibili video title via public API
+async function getBilibiliTitle(url) {
+    try {
+        const bvid = extractBvid(url);
+        if (!bvid) return 'Bilibili Video';
+        const response = await fetch(`https://api.bilibili.com/x/web-interface/view?bvid=${bvid}`, {
+            headers: { 'User-Agent': 'Mozilla/5.0', 'Referer': 'https://www.bilibili.com' }
+        });
+        if (!response.ok) return 'Bilibili Video';
+        const data = await response.json();
+        return data?.data?.title || 'Bilibili Video';
+    } catch (error) {
+        console.error('[Bilibili Title Error]', error);
+        return 'Bilibili Video';
+    }
+}
+
+// Search Bilibili via public API
+async function searchBilibili(query) {
+    try {
+        const params = new URLSearchParams({ search_type: 'video', keyword: query, page: '1' });
+        const url = `https://api.bilibili.com/x/web-interface/search/type?${params}`;
+        const response = await fetch(url, {
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Referer': 'https://www.bilibili.com',
+                'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8'
+            }
+        });
+        if (!response.ok) return [];
+        const data = await response.json();
+        if (data.code !== 0 || !data?.data?.result) return [];
+        return data.data.result.slice(0, 5).map(v => ({
+            id: v.bvid,
+            title: v.title.replace(/<[^>]+>/g, ''),
+            thumbnail: v.pic.startsWith('//') ? `https:${v.pic}` : v.pic,
+            url: `https://www.bilibili.com/video/${v.bvid}`,
+            duration: v.duration,
+            platform: 'bilibili'
+        }));
+    } catch (e) {
+        console.error('[Bilibili Search Error]', e);
+        return [];
+    }
+}
+
 // Helper to extract Spotify Track and Artist from OpenGraph meta tags
 async function getSpotifyTitle(url) {
     try {
@@ -122,10 +174,21 @@ const boothSessionHandler = (io) => {
             rooms.delete(roomId);
         });
 
-        socket.on('search_song', async ({ query }, callback) => {
+        socket.on('search_song', async ({ query, platform }, callback) => {
             try {
                 let searchQuery = query.trim();
 
+                if (platform === 'bilibili') {
+                    // Append KTV keyword for better Bilibili karaoke results
+                    if (!searchQuery.includes('KTV') && !searchQuery.includes('卡拉OK') && !searchQuery.includes('karaoke')) {
+                        searchQuery += ' KTV';
+                    }
+                    const results = await searchBilibili(searchQuery);
+                    if (callback) callback({ success: true, results });
+                    return;
+                }
+
+                // YouTube search (default)
                 // If it's a spotify URL, extract the track/artist
                 if (searchQuery.includes('spotify.com/track/')) {
                     const spTitle = await getSpotifyTitle(searchQuery);
@@ -158,8 +221,8 @@ const boothSessionHandler = (io) => {
             const room = rooms.get(user.roomId);
             if (!room) return;
 
-            // Fetch the actual title from YouTube if not provided by search popover
-            const title = preFetchedTitle || await getYouTubeTitle(url);
+            // Fetch the actual title if not provided by search popover
+            const title = preFetchedTitle || (url.includes('bilibili.com') ? await getBilibiliTitle(url) : await getYouTubeTitle(url));
 
             const song = {
                 id: Date.now().toString(),
