@@ -2,8 +2,7 @@ import { useState, useEffect } from 'react';
 import HostScreen from './HostScreen';
 import MobileScreen from './MobileScreen';
 import { io } from 'socket.io-client';
-
-const SOCKET_URL = `http://${window.location.hostname}:3001`;
+import { invoke } from '@tauri-apps/api/core';
 
 const getSessionId = () => {
   let id = localStorage.getItem('booth_sessionId');
@@ -15,7 +14,8 @@ const getSessionId = () => {
 };
 
 function App() {
-  const [socket] = useState(() => io(SOCKET_URL));
+  const [socket, setSocket] = useState(null);
+  const [hostIp, setHostIp] = useState('');
   const [sessionId] = useState(() => getSessionId());
 
   const urlParams = new URLSearchParams(window.location.search);
@@ -23,6 +23,32 @@ function App() {
 
   const [roomId, setRoomId] = useState(initialRoom || '');
   const [isHost, setIsHost] = useState(false);
+
+  useEffect(() => {
+    // If we're inside Tauri, the window object will have __TAURI__
+    // We fetch the host IP from Rust, then connect the socket
+    const initializeSocket = async () => {
+      let ip = window.location.hostname;
+      console.log("Initializing Socket. Default IP is:", ip);
+      try {
+        console.log("Invoking get_local_ip IPC command...");
+        const rustIp = await invoke('get_local_ip');
+        console.log("Rust returned IP:", rustIp);
+        if (rustIp && typeof rustIp === 'string') {
+          ip = rustIp;
+        }
+      } catch (err) {
+        console.warn("Could not get local IP via Tauri, falling back to localhost", err);
+      }
+      console.log("Final IP assigned to Host and Socket:", ip);
+      setHostIp(ip);
+      setSocket(io(`http://${ip}:3001`));
+    };
+
+    if (!socket) {
+      initializeSocket();
+    }
+  }, [socket]);
 
   const [selection, setSelection] = useState(initialRoom ? 'join' : null);
   const [usernameInput, setUsernameInput] = useState('');
@@ -86,10 +112,16 @@ function App() {
 
   const handleStartHost = (e) => {
     e.preventDefault();
-    if (!usernameInput.trim() || !socket) return;
+    console.log("handleStartHost triggers. usernameInput:", usernameInput.trim());
+    if (!usernameInput.trim() || !socket) {
+      console.warn("Returning early! username missing or socket is null. socket:", !!socket);
+      return;
+    }
 
+    console.log("Emitting create_room with sessionId:", sessionId);
     socket.emit('create_room', { sessionId }, (response) => {
-      if (response.success) {
+      console.log("create_room Response received:", response);
+      if (response && response.success) {
         setRoomId(response.roomId);
         setHostName(usernameInput.trim());
         setIsHost(true);
@@ -146,7 +178,7 @@ function App() {
   if (!socket) {
     content = <div className="flex items-center justify-center h-screen text-white"><p className="text-xl">Connecting to Booth server...</p></div>;
   } else if (isHost && roomId) {
-    content = <HostScreen socket={socket} roomId={roomId} hostName={hostName} sessionId={sessionId} onLeaveRoom={handleLeaveRoom} />;
+    content = <HostScreen socket={socket} roomId={roomId} hostName={hostName} sessionId={sessionId} hostIp={hostIp} onLeaveRoom={handleLeaveRoom} />;
   } else if (user) {
     content = <MobileScreen socket={socket} user={user} sessionId={sessionId} onLeaveRoom={handleLeaveRoom} />;
   } else {
