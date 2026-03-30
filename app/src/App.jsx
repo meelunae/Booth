@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import HostScreen from './HostScreen';
 import MobileScreen from './MobileScreen';
 import { io } from 'socket.io-client';
@@ -13,7 +14,21 @@ const getSessionId = () => {
   return id;
 };
 
+function LanguageToggle() {
+  const { i18n } = useTranslation();
+  const isChinese = i18n.resolvedLanguage === 'zh';
+  return (
+    <button
+      onClick={() => i18n.changeLanguage(isChinese ? 'en' : 'zh')}
+      className="text-xs font-bold text-gray-400 hover:text-white transition-colors px-2 py-1 rounded-lg hover:bg-white/10 tracking-wider"
+    >
+      {isChinese ? 'EN' : '中文'}
+    </button>
+  );
+}
+
 function App() {
+  const { t } = useTranslation();
   const [socket, setSocket] = useState(null);
   const [hostIp, setHostIp] = useState('');
   const [sessionId] = useState(() => getSessionId());
@@ -25,8 +40,6 @@ function App() {
   const [isHost, setIsHost] = useState(false);
 
   useEffect(() => {
-    // If we're inside Tauri, the window object will have __TAURI__
-    // We fetch the host IP from Rust, then connect the socket
     const initializeSocket = async () => {
       let ip = window.location.hostname;
       console.log("Initializing Socket. Default IP is:", ip);
@@ -56,6 +69,7 @@ function App() {
   const [isJoining, setIsJoining] = useState(false);
   const [user, setUser] = useState(null);
   const [hostName, setHostName] = useState('');
+
   useEffect(() => {
     if (!socket) return;
 
@@ -65,8 +79,6 @@ function App() {
       const savedName = localStorage.getItem('booth_name');
 
       if (savedRoomId && savedIsHost && savedName) {
-        // If a room parameter exists in the URL but doesn't match the saved room,
-        // the user clicked a new invite link. Clear the auto-resume memory.
         if (initialRoom && initialRoom !== savedRoomId) {
           localStorage.removeItem('booth_roomId');
           localStorage.removeItem('booth_isHost');
@@ -99,7 +111,6 @@ function App() {
       }
     };
 
-    // Run once if already connected, otherwise listen for every subsequent connection
     if (socket.connected) {
       handleReconnect();
     }
@@ -112,15 +123,9 @@ function App() {
 
   const handleStartHost = (e) => {
     e.preventDefault();
-    console.log("handleStartHost triggers. usernameInput:", usernameInput.trim());
-    if (!usernameInput.trim() || !socket) {
-      console.warn("Returning early! username missing or socket is null. socket:", !!socket);
-      return;
-    }
+    if (!usernameInput.trim() || !socket) return;
 
-    console.log("Emitting create_room with sessionId:", sessionId);
     socket.emit('create_room', { sessionId }, (response) => {
-      console.log("create_room Response received:", response);
       if (response && response.success) {
         setRoomId(response.roomId);
         setHostName(usernameInput.trim());
@@ -130,8 +135,6 @@ function App() {
         localStorage.setItem('booth_isHost', 'true');
         localStorage.setItem('booth_name', usernameInput.trim());
 
-        // We only append the room code. The host=true param is removed because
-        // the server now verifies host privileges via WebSocket connection ID.
         window.history.pushState({}, '', `/?room=${response.roomId}`);
       }
     });
@@ -176,7 +179,7 @@ function App() {
 
   let content;
   if (!socket) {
-    content = <div className="flex items-center justify-center h-screen text-white"><p className="text-xl">Connecting to Booth server...</p></div>;
+    content = <div className="flex items-center justify-center h-screen text-white"><p className="text-xl">{t('connecting')}</p></div>;
   } else if (isHost && roomId) {
     content = <HostScreen socket={socket} roomId={roomId} hostName={hostName} sessionId={sessionId} hostIp={hostIp} onLeaveRoom={handleLeaveRoom} />;
   } else if (user) {
@@ -185,28 +188,31 @@ function App() {
     content = (
       <div className="flex flex-col items-center justify-center min-h-screen p-6 relative text-white">
         <div className="glass p-8 w-full max-w-sm rounded-3xl z-10 shadow-2xl relative">
+          <div className="flex justify-end mb-2">
+            <LanguageToggle />
+          </div>
           <h1 className="text-5xl font-extrabold text-center mb-2 bg-clip-text text-transparent bg-gradient-to-br from-neon-magenta to-white">
-            Booth
+            {t('app_title')}
           </h1>
-          <p className="text-gray-400 text-center mb-10 font-medium">Sing together, make memories, have fun.</p>
+          <p className="text-gray-400 text-center mb-10 font-medium">{t('app_tagline')}</p>
 
           {!selection ? (
             <div className="flex flex-col gap-4">
               <button onClick={() => setSelection('host')} className="w-full bg-gradient-to-r from-neon-magenta to-neon-cyan text-white font-bold text-lg rounded-xl px-4 py-4 hover:opacity-90 active:scale-[0.98] transition-all shadow-[0_0_20px_rgba(234,0,217,0.4)]">
-                Host a Room
+                {t('host_a_room')}
               </button>
               <button onClick={() => setSelection('join')} className="w-full bg-white/10 border border-white/20 text-white font-bold text-lg rounded-xl px-4 py-4 hover:bg-white/20 active:scale-[0.98] transition-all">
-                Join a Room
+                {t('join_a_room')}
               </button>
             </div>
           ) : selection === 'host' ? (
             <form onSubmit={handleStartHost} className="flex flex-col gap-4 animate-in fade-in slide-in-from-bottom-4 duration-300">
-              <button type="button" onClick={() => setSelection(null)} className="text-gray-400 text-sm mb-2 hover:text-white transition-colors text-left flex items-center gap-1 w-fit px-2 py-1 rounded-lg hover:bg-white/5">&larr; Back</button>
+              <button type="button" onClick={() => setSelection(null)} className="text-gray-400 text-sm mb-2 hover:text-white transition-colors text-left flex items-center gap-1 w-fit px-2 py-1 rounded-lg hover:bg-white/5">{t('back')}</button>
               <div className="flex flex-col gap-2">
-                <label className="text-xs font-bold text-neon-magenta uppercase tracking-widest pl-2">Host Nickname</label>
+                <label className="text-xs font-bold text-neon-magenta uppercase tracking-widest pl-2">{t('host_nickname_label')}</label>
                 <input
                   type="text"
-                  placeholder="e.g. Meelunae"
+                  placeholder={t('host_nickname_placeholder')}
                   value={usernameInput}
                   onChange={(e) => setUsernameInput(e.target.value)}
                   className="w-full bg-black/50 border border-white/20 rounded-xl px-4 py-4 text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-neon-magenta focus:border-transparent transition-all"
@@ -219,18 +225,18 @@ function App() {
                 disabled={!usernameInput.trim()}
                 className="w-full bg-gradient-to-r from-neon-magenta to-neon-cyan text-white font-bold rounded-xl px-4 py-4 hover:opacity-90 active:scale-[0.98] transition-all disabled:opacity-50 disabled:active:scale-100 shadow-[0_0_20px_rgba(234,0,217,0.4)] mt-2"
               >
-                Create Room
+                {t('create_room')}
               </button>
             </form>
           ) : (
             <form onSubmit={handleJoinSession} className="flex flex-col gap-4 animate-in fade-in slide-in-from-bottom-4 duration-300">
-              <button type="button" onClick={() => setSelection(null)} className="text-gray-400 text-sm mb-2 hover:text-white transition-colors text-left flex items-center gap-1 w-fit px-2 py-1 rounded-lg hover:bg-white/5">&larr; Back</button>
+              <button type="button" onClick={() => setSelection(null)} className="text-gray-400 text-sm mb-2 hover:text-white transition-colors text-left flex items-center gap-1 w-fit px-2 py-1 rounded-lg hover:bg-white/5">{t('back')}</button>
               <div className="flex flex-col gap-4">
                 <div className="flex flex-col gap-2">
-                  <label className="text-xs font-bold text-neon-cyan uppercase tracking-widest pl-2">Room Code</label>
+                  <label className="text-xs font-bold text-neon-cyan uppercase tracking-widest pl-2">{t('room_code_label')}</label>
                   <input
                     type="text"
-                    placeholder="4-Letter Code"
+                    placeholder={t('room_code_placeholder')}
                     value={roomInput}
                     onChange={(e) => setRoomInput(e.target.value.toUpperCase())}
                     className="w-full bg-black/50 border border-white/20 rounded-xl px-4 py-4 text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-neon-cyan focus:border-transparent transition-all uppercase tracking-widest font-bold"
@@ -239,10 +245,10 @@ function App() {
                   />
                 </div>
                 <div className="flex flex-col gap-2">
-                  <label className="text-xs font-bold text-neon-cyan uppercase tracking-widest pl-2">Nickname</label>
+                  <label className="text-xs font-bold text-neon-cyan uppercase tracking-widest pl-2">{t('nickname_label')}</label>
                   <input
                     type="text"
-                    placeholder="Your name..."
+                    placeholder={t('nickname_placeholder')}
                     value={usernameInput}
                     onChange={(e) => setUsernameInput(e.target.value)}
                     className="w-full bg-black/50 border border-white/20 rounded-xl px-4 py-4 text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-neon-cyan focus:border-transparent transition-all"
@@ -256,7 +262,7 @@ function App() {
                 disabled={isJoining || !usernameInput.trim() || !roomInput.trim()}
                 className="w-full bg-gradient-to-r from-neon-magenta to-neon-cyan text-white font-bold rounded-xl px-4 py-4 hover:opacity-90 active:scale-[0.98] transition-all disabled:opacity-50 disabled:active:scale-100 shadow-[0_0_20px_rgba(234,0,217,0.4)] mt-2"
               >
-                {isJoining ? 'Joining...' : 'Enter Room'}
+                {isJoining ? t('joining') : t('enter_room')}
               </button>
             </form>
           )}

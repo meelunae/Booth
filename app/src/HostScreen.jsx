@@ -1,11 +1,11 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
 import QRCode from 'react-qr-code';
 import YouTube from 'react-youtube';
 import { DndContext, closestCenter, KeyboardSensor, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';
 import { arrayMove, SortableContext, sortableKeyboardCoordinates, verticalListSortingStrategy, useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 
-// Sub-component for individual draggable song rows
 function SortableSongItem({ song, idx, onRemove }) {
     const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: song.id });
 
@@ -22,10 +22,8 @@ function SortableSongItem({ song, idx, onRemove }) {
             style={style}
             className={`glass p-3 rounded-xl flex items-center gap-4 group border bg-black/40 relative overflow-hidden transition-all ${isDragging ? 'shadow-[0_0_20px_rgba(234,0,217,0.4)] scale-105 border-neon-magenta/50 z-50' : 'border-white/5 hover:border-white/20 hover:bg-black/60 z-10'}`}
         >
-            {/* Animated left border on hover/drag */}
             <div className={`absolute top-0 left-0 w-1 h-full bg-gradient-to-b from-neon-magenta to-neon-cyan transition-transform duration-300 ${isDragging ? 'translate-x-0' : '-translate-x-full group-hover:translate-x-0'}`} />
 
-            {/* Drag Handle */}
             <div {...attributes} {...listeners} className="cursor-grab active:cursor-grabbing p-2 -ml-2 text-gray-500 hover:text-neon-cyan transition-colors z-10 shrink-0">
                 <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8h16M4 16h16" />
@@ -44,7 +42,6 @@ function SortableSongItem({ song, idx, onRemove }) {
                 </div>
             </div>
 
-            {/* Delete/Trash Button */}
             <button
                 onClick={() => onRemove(song.id)}
                 className="p-2.5 z-10 text-gray-500 hover:text-white hover:bg-red-500/80 hover:shadow-[0_0_15px_rgba(255,0,0,0.5)] rounded-lg opacity-0 group-hover:opacity-100 transition-all shrink-0"
@@ -57,19 +54,86 @@ function SortableSongItem({ song, idx, onRemove }) {
     );
 }
 
+function LanguageToggle() {
+    const { i18n } = useTranslation();
+    const isChinese = i18n.resolvedLanguage === 'zh';
+    return (
+        <button
+            onClick={() => i18n.changeLanguage(isChinese ? 'en' : 'zh')}
+            className="text-xs font-bold text-gray-400 hover:text-white transition-colors px-2 py-1 rounded-lg hover:bg-white/10"
+        >
+            {isChinese ? 'EN' : '中文'}
+        </button>
+    );
+}
+
+function BilibiliPlayer({ url, onEnded, nextSong, t }) {
+    const bvidMatch = url.match(/bilibili\.com\/video\/(BV[^/?#]+)/);
+    const bvid = bvidMatch ? bvidMatch[1] : null;
+    const iframeRef = useRef(null);
+
+    // Listen for postMessage events from the Bilibili player iframe
+    useEffect(() => {
+        const handleMessage = (e) => {
+            if (!e.data) return;
+            const data = typeof e.data === 'string' ? (() => { try { return JSON.parse(e.data); } catch { return {}; } })() : e.data;
+            // Bilibili player emits various end-of-video events
+            if (data.event === 'ended' || data.type === 'ended' || data.event === 'end' || data.bilibili_player_event === 'ended') {
+                onEnded();
+            }
+        };
+        window.addEventListener('message', handleMessage);
+        return () => window.removeEventListener('message', handleMessage);
+    }, [onEnded]);
+
+    if (!bvid) return null;
+
+    return (
+        <div className="relative w-full h-full group">
+            <iframe
+                ref={iframeRef}
+                key={bvid}
+                src={`//player.bilibili.com/player.html?bvid=${bvid}&autoplay=1&high_quality=1&danmaku=0`}
+                scrolling="no"
+                frameBorder="0"
+                allowFullScreen
+                className="w-full h-full"
+                title="Bilibili Player"
+            />
+            {/* Manual "Next Song" overlay — always available for the host */}
+            {nextSong && (
+                <div className="absolute bottom-0 left-0 right-0 p-6 bg-gradient-to-t from-black/90 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex items-end justify-between pointer-events-none">
+                    <div className="pointer-events-none">
+                        <p className="text-xs uppercase tracking-widest text-neon-cyan font-bold mb-1">{t('up_next')}</p>
+                        <p className="text-lg font-bold text-white truncate max-w-xl">{nextSong.title}</p>
+                        <p className="text-sm text-gray-300">{t('queued_by_queue')} <span className="text-neon-cyan font-semibold">{nextSong.queuedBy}</span></p>
+                    </div>
+                    <button
+                        onClick={onEnded}
+                        className="pointer-events-auto bg-gradient-to-r from-neon-magenta to-neon-cyan text-white font-bold px-6 py-3 rounded-xl hover:scale-105 active:scale-95 transition-all shadow-[0_0_20px_rgba(234,0,217,0.5)] flex items-center gap-2 shrink-0 ml-4"
+                    >
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                        </svg>
+                        {t('start_performance')}
+                    </button>
+                </div>
+            )}
+        </div>
+    );
+}
+
 export default function HostScreen({ socket, roomId, hostName, sessionId, hostIp, onLeaveRoom }) {
+    const { t } = useTranslation();
     const [session, setSession] = useState({ queue: [], currentSong: null, users: [] });
     const [playerError, setPlayerError] = useState(null);
     const [showEndModal, setShowEndModal] = useState(false);
 
-    // Setup drag sensors
     const sensors = useSensors(
         useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
         useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
     );
 
-    // Generate the correct join URL using the local network IP rather than localhost
-    // Mobile phones must be on the same WiFi network to connect to this IP
     const joinUrl = `http://${hostIp}:3001/?room=${roomId}`;
 
     const activeUsers = hostName
@@ -97,7 +161,6 @@ export default function HostScreen({ socket, roomId, hostName, sessionId, hostIp
     };
 
     const handleRemoveSong = (songId) => {
-        // We simulate the Host user object since Host Screen doesn't formally 'join_session' as a jammer
         socket.emit('remove_song', { roomId, sessionId, songId });
     };
 
@@ -125,53 +188,61 @@ export default function HostScreen({ socket, roomId, hostName, sessionId, hostIp
         }
     };
 
+    const isBilibili = (url) => url && url.includes('bilibili.com');
+
     return (
         <div className="flex h-screen w-full overflow-hidden bg-black text-white font-sans">
             {/* Main Video Area */}
             <div className="flex-1 flex flex-col relative">
                 {playerError && (
                     <div className="absolute top-4 left-1/2 -translate-x-1/2 z-50 bg-red-600/90 text-white px-6 py-3 rounded-xl shadow-2xl backdrop-blur-md border border-red-400/50 flex items-center gap-4">
-                        <span className="font-bold">Playback Error:</span>
+                        <span className="font-bold">{t('playback_error')}</span>
                         <span className="text-sm">{playerError}</span>
-                        <button onClick={handleSkipCurrent} className="px-3 py-1 bg-white/20 hover:bg-white/30 rounded-lg text-sm ml-2">Skip Song</button>
+                        <button onClick={handleSkipCurrent} className="px-3 py-1 bg-white/20 hover:bg-white/30 rounded-lg text-sm ml-2">{t('skip_song')}</button>
                     </div>
                 )}
 
                 {session.currentSong ? (
                     <div className="w-full h-full relative group bg-black flex items-center justify-center">
-                        <YouTube
-                            key={session.currentSong.id}
-                            videoId={extractVideoId(session.currentSong.url)}
-                            opts={{
-                                width: '100%',
-                                height: '100%',
-                                playerVars: {
-                                    autoplay: 1,
-                                    controls: 1,
-                                    playsinline: 1,
-                                    modestbranding: 1
-                                }
-                            }}
-                            onEnd={handleVideoEnded}
-                            onError={(e) => {
-                                console.error("YouTube Error:", e.data);
-                                // e.data contains the error code (2, 5, 100, 101, 150)
-                                let errorMsg = "Unknown player error";
-                                if (e.data === 2) errorMsg = "Invalid video parameter";
-                                else if (e.data === 5) errorMsg = "HTML5 player error";
-                                else if (e.data === 100) errorMsg = "Video not found or removed";
-                                else if (e.data === 101 || e.data === 150) errorMsg = "Uploader blocked embedding";
-                                setPlayerError(errorMsg);
-                            }}
-                            className="w-full h-full"
-                            iframeClassName="w-full h-full"
-                        />
-                        {/* Minimal overlay for the current song info */}
+                        {isBilibili(session.currentSong.url) ? (
+                            <BilibiliPlayer
+                                url={session.currentSong.url}
+                                onEnded={handleVideoEnded}
+                                nextSong={session.queue[0] || null}
+                                t={t}
+                            />
+                        ) : (
+                            <YouTube
+                                key={session.currentSong.id}
+                                videoId={extractVideoId(session.currentSong.url)}
+                                opts={{
+                                    width: '100%',
+                                    height: '100%',
+                                    playerVars: {
+                                        autoplay: 1,
+                                        controls: 1,
+                                        playsinline: 1,
+                                        modestbranding: 1
+                                    }
+                                }}
+                                onEnd={handleVideoEnded}
+                                onError={(e) => {
+                                    let errorMsg = "Unknown player error";
+                                    if (e.data === 2) errorMsg = "Invalid video parameter";
+                                    else if (e.data === 5) errorMsg = "HTML5 player error";
+                                    else if (e.data === 100) errorMsg = "Video not found or removed";
+                                    else if (e.data === 101 || e.data === 150) errorMsg = "Uploader blocked embedding";
+                                    setPlayerError(errorMsg);
+                                }}
+                                className="w-full h-full"
+                                iframeClassName="w-full h-full"
+                            />
+                        )}
                         <div className="absolute top-0 left-0 w-full p-6 bg-gradient-to-b from-black/80 to-transparent pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity duration-300">
                             <h1 className="text-4xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-neon-magenta to-neon-cyan drop-shadow-md">
                                 {session.currentSong.title}
                             </h1>
-                            <p className="text-gray-300 text-lg drop-shadow-md">Queued by: {session.currentSong.queuedBy}</p>
+                            <p className="text-gray-300 text-lg drop-shadow-md">{t('queued_by')} {session.currentSong.queuedBy}</p>
                         </div>
                     </div>
                 ) : session.queue.length > 0 ? (
@@ -179,12 +250,12 @@ export default function HostScreen({ socket, roomId, hostName, sessionId, hostIp
                         <div className="absolute inset-0 bg-gradient-to-br from-neon-dark-blue to-neon-purple opacity-80 z-0" />
                         <div className="z-10 text-center glass p-12 rounded-3xl shadow-[0_0_50px_rgba(10,189,198,0.3)] border border-neon-cyan/30 animate-in zoom-in duration-500">
                             <h2 className="text-2xl text-neon-cyan mb-2 font-bold uppercase tracking-widest flex items-center justify-center gap-3">
-                                Up Next <span className="w-2 h-2 rounded-full bg-neon-cyan animate-ping"></span>
+                                {t('up_next')} <span className="w-2 h-2 rounded-full bg-neon-cyan animate-ping"></span>
                             </h2>
                             <h1 className="text-5xl font-extrabold mb-8 text-white drop-shadow-lg leading-tight text-balance max-w-3xl">
                                 {session.queue[0].title}
                             </h1>
-                            <p className="text-xl text-gray-300 mb-12">Queued by <span className="text-neon-cyan font-bold">{session.queue[0].queuedBy}</span></p>
+                            <p className="text-xl text-gray-300 mb-12">{t('queued_by_queue')} <span className="text-neon-cyan font-bold">{session.queue[0].queuedBy}</span></p>
                             <button
                                 onClick={handleSkipCurrent}
                                 className="bg-gradient-to-r from-neon-magenta to-neon-cyan text-white text-xl font-bold px-10 py-5 rounded-2xl hover:scale-105 active:scale-95 transition-all shadow-[0_0_30px_rgba(234,0,217,0.5)] flex items-center gap-3 mx-auto"
@@ -193,7 +264,7 @@ export default function HostScreen({ socket, roomId, hostName, sessionId, hostIp
                                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
                                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                                 </svg>
-                                Start Performance
+                                {t('start_performance')}
                             </button>
                         </div>
                     </div>
@@ -204,35 +275,38 @@ export default function HostScreen({ socket, roomId, hostName, sessionId, hostIp
                             <h1 className="text-6xl font-extrabold mb-4 bg-clip-text text-transparent bg-gradient-to-r from-neon-magenta to-neon-cyan drop-shadow-lg">
                                 {hostName ? `${hostName}'s Room` : 'Booth Session'}
                             </h1>
-                            <p className="text-2xl text-gray-200">Scan QR to get the party started!</p>
+                            <p className="text-2xl text-gray-200">{t('scan_qr_prompt')}</p>
                         </div>
                     </div>
                 )}
             </div>
 
-            {/* Sidebar for Queue and QR */}
+            {/* Sidebar */}
             <div className="w-96 glass border-l border-white/10 flex flex-col shrink-0">
                 <div className="p-6 border-b border-white/10 flex flex-col items-center justify-center bg-black/40">
-                    <p className="text-sm text-gray-400 mb-1 uppercase tracking-wider font-semibold">Join Room</p>
+                    <div className="w-full flex justify-end mb-2">
+                        <LanguageToggle />
+                    </div>
+                    <p className="text-sm text-gray-400 mb-1 uppercase tracking-wider font-semibold">{t('join_room')}</p>
                     <p className="text-4xl font-extrabold text-white mb-4 tracking-widest">{roomId}</p>
                     <div className="bg-white p-3 rounded-xl shadow-[0_0_20px_rgba(10,189,198,0.4)]">
                         <QRCode value={joinUrl} size={150} level="M" />
                     </div>
                     <p className="mt-4 mb-4 text-xs text-center text-gray-500 max-w-[200px]">
-                        Scan code or use link to add songs to the queue
+                        {t('scan_code_desc')}
                     </p>
                     <button
                         onClick={() => setShowEndModal(true)}
                         className="w-full bg-red-500/10 text-red-500 hover:bg-red-500 hover:text-white border border-red-500/30 uppercase tracking-widest font-bold text-xs py-2.5 rounded-xl transition-all shadow-[0_0_15px_rgba(255,0,0,0.15)] hover:shadow-[0_0_20px_rgba(255,0,0,0.4)]"
                     >
-                        End Session
+                        {t('end_session')}
                     </button>
                 </div>
 
                 <div className="flex-1 p-6 overflow-y-auto custom-scrollbar flex flex-col gap-4">
                     <div className="flex items-center justify-between border-b border-white/10 pb-4">
                         <h2 className="text-xl font-bold flex items-center gap-2">
-                            Up Next
+                            {t('up_next')}
                             <span className="text-xs font-normal bg-white/10 px-2 py-0.5 rounded-full text-neon-cyan">
                                 {session.queue.length}
                             </span>
@@ -242,7 +316,7 @@ export default function HostScreen({ socket, roomId, hostName, sessionId, hostIp
                                 onClick={handleSkipCurrent}
                                 className="text-xs font-bold text-black bg-neon-cyan px-3 py-1.5 rounded-lg hover:bg-white hover:scale-105 active:scale-95 transition-all shadow-[0_0_10px_rgba(10,189,198,0.3)]"
                             >
-                                Skip Current
+                                {t('skip_current')}
                             </button>
                         )}
                     </div>
@@ -267,18 +341,18 @@ export default function HostScreen({ socket, roomId, hostName, sessionId, hostIp
                                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
                                         </svg>
                                     </div>
-                                    <p className="text-gray-300 font-semibold text-sm">The queue is empty.</p>
-                                    <p className="text-gray-500 text-xs text-balance">Scan the QR code to search and add some tracks!</p>
+                                    <p className="text-gray-300 font-semibold text-sm">{t('queue_empty_host')}</p>
+                                    <p className="text-gray-500 text-xs text-balance">{t('queue_empty_host_desc')}</p>
                                 </div>
                             )}
                         </div>
                     </DndContext>
                 </div>
 
-                {/* Live Acts VIP List */}
+                {/* Live Acts */}
                 <div className="p-5 bg-black/60 border-t border-neon-cyan/30 flex flex-col gap-3 shrink-0">
                     <h3 className="text-xs uppercase tracking-widest text-neon-cyan font-bold flex items-center gap-2">
-                        <span className="w-2 h-2 rounded-full bg-neon-magenta animate-pulse" /> Live Acts
+                        <span className="w-2 h-2 rounded-full bg-neon-magenta animate-pulse" /> {t('live_acts')}
                     </h3>
                     <div className="flex gap-3 overflow-x-auto custom-scrollbar pb-2 items-center">
                         {activeUsers.map(u => (
@@ -286,7 +360,7 @@ export default function HostScreen({ socket, roomId, hostName, sessionId, hostIp
                                 <div className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold ${u.isHost ? 'bg-neon-magenta text-white' : 'bg-white/20 text-white'}`}>
                                     {u.username.charAt(0).toUpperCase()}
                                 </div>
-                                <span className="text-xs font-bold whitespace-nowrap">{u.isHost ? `${u.username} (Host)` : u.username}</span>
+                                <span className="text-xs font-bold whitespace-nowrap">{u.isHost ? `${u.username} ${t('host_badge')}` : u.username}</span>
                             </div>
                         ))}
                     </div>
@@ -302,14 +376,14 @@ export default function HostScreen({ socket, roomId, hostName, sessionId, hostIp
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
                             </svg>
                         </div>
-                        <h2 className="text-2xl font-bold text-white mb-2">End Session?</h2>
-                        <p className="text-gray-400 mb-8">This will immediately disconnect all Acts and destroy the room. This action cannot be undone.</p>
+                        <h2 className="text-2xl font-bold text-white mb-2">{t('end_session_title')}</h2>
+                        <p className="text-gray-400 mb-8">{t('end_session_desc')}</p>
                         <div className="flex gap-4">
                             <button
                                 onClick={() => setShowEndModal(false)}
                                 className="flex-1 py-3 px-4 rounded-xl font-bold text-white bg-white/10 hover:bg-white/20 transition-colors"
                             >
-                                Cancel
+                                {t('cancel')}
                             </button>
                             <button
                                 onClick={() => {
@@ -318,7 +392,7 @@ export default function HostScreen({ socket, roomId, hostName, sessionId, hostIp
                                 }}
                                 className="flex-1 py-3 px-4 rounded-xl font-bold text-white bg-red-500 hover:bg-red-600 shadow-[0_0_15px_rgba(255,0,0,0.4)] transition-all"
                             >
-                                End Session
+                                {t('end_session')}
                             </button>
                         </div>
                     </div>
